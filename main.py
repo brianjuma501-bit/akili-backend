@@ -54,7 +54,7 @@ def get_user(user_id: str):
     return u
 
 
-def call_gemini(system_prompt: str, messages: list) -> str:
+def call_gemini(system_prompt, messages):
     if not GEMINI_API_KEY:
         return "Gemini API key not configured."
     try:
@@ -74,10 +74,7 @@ def call_gemini(system_prompt: str, messages: list) -> str:
             return data["candidates"][0]["content"]["parts"][0]["text"]
         elif "error" in data:
             return f"AI error: {data['error'].get('message', 'Unknown')}"
-        else:
-            return "Could not get a response. Please try again."
-    except requests.exceptions.Timeout:
-        return "Request timed out. Please try again."
+        return "Could not get a response. Please try again."
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -114,7 +111,7 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     system: str
-    messages: list[Message]
+    messages: list
     user_id: str
 
 
@@ -122,7 +119,7 @@ class SaveChatRequest(BaseModel):
     user_id: str
     chat_id: str
     title: str
-    messages: list[Message]
+    messages: list
 
 
 class DeleteChatRequest(BaseModel):
@@ -188,7 +185,9 @@ def user_status(user_id: str):
     u = get_user(user_id)
     in_trial = u["trial_used"] < FREE_TRIAL_LIMIT
     needs_entry = not in_trial and not u["entry_paid"]
-    needs_subscription = u["entry_paid"] and u["is_member"] and u["daily_count"] >= DAILY_LIMIT
+    needs_subscription = (u["entry_paid"] and
+                          u["is_member"] and
+                          u["daily_count"] >= DAILY_LIMIT)
     can_chat = in_trial or (u["entry_paid"] and u["daily_count"] < DAILY_LIMIT)
     return {
         "is_owner": False,
@@ -232,14 +231,14 @@ def stk_push(req: STKRequest):
         response = requests.post(
             "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
             json=payload,
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {token}",
+                     "Content-Type": "application/json"},
             timeout=15
         )
         result = response.json()
         if result.get("ResponseCode") == "0":
             return {"success": True, "message": "M-Pesa prompt sent! Enter your PIN."}
-        else:
-            return {"success": False, "message": "Could not send prompt. Please send manually."}
+        return {"success": False, "message": "Could not send prompt. Please send manually."}
     except Exception:
         return {"success": False, "message": "M-Pesa error. Please send manually."}
 
@@ -279,11 +278,10 @@ def verify_payment(req: VerifyPaymentRequest):
     if req.payment_method == "subscription":
         u["daily_count"] = 0
         return {"success": True, "message": "Subscribed! Keep chatting!"}
-    else:
-        u["entry_paid"] = True
-        u["is_member"] = True
-        u["daily_count"] = 0
-        return {"success": True, "message": "Welcome to Akili! You now have 20 messages per day."}
+    u["entry_paid"] = True
+    u["is_member"] = True
+    u["daily_count"] = 0
+    return {"success": True, "message": "Welcome to Akili! You now have 20 messages per day."}
 
 
 @app.post("/chat")
@@ -305,14 +303,18 @@ def chat(request: ChatRequest):
         if u["trial_used"] < FREE_TRIAL_LIMIT:
             u["trial_used"] += 1
         elif not u["entry_paid"]:
-            return {"error": "NEEDS_ENTRY", "message": "Pay KSh 130 to become a member."}
+            return {"error": "NEEDS_ENTRY",
+                    "message": "Pay KSh 130 to become a member and get 20 messages per day."}
         elif u["daily_count"] < DAILY_LIMIT:
             u["daily_count"] += 1
         else:
-            return {"error": "NEEDS_SUBSCRIPTION", "message": "Daily limit reached. Pay to continue."}
+            return {"error": "NEEDS_SUBSCRIPTION",
+                    "message": "Daily limit reached. Pay to continue chatting today."}
     reply = call_gemini(
         request.system,
-        [{"role": m.role, "content": m.content} for m in request.messages]
+        [{"role": m["role"] if isinstance(m, dict) else m.role,
+          "content": m["content"] if isinstance(m, dict) else m.content}
+         for m in request.messages]
     )
     return {"reply": reply}
 
@@ -322,7 +324,9 @@ def save_chat(req: SaveChatRequest):
     u = get_user(req.user_id)
     u["chats"][req.chat_id] = {
         "title": req.title,
-        "messages": [{"role": m.role, "content": m.content} for m in req.messages],
+        "messages": [{"role": m["role"] if isinstance(m, dict) else m.role,
+                      "content": m["content"] if isinstance(m, dict) else m.content}
+                     for m in req.messages],
         "saved_at": str(datetime.now())
     }
     return {"success": True}
